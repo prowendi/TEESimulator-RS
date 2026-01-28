@@ -263,7 +263,14 @@ bool get_regs(int pid, struct user_regs_struct &regs) {
     struct iovec reg_iov = {.iov_base = &regs, .iov_len = sizeof(struct user_regs_struct)};
     if (ptrace(PTRACE_GETREGSET, pid, NT_PRSTATUS, &reg_iov) == -1) {
         PLOGE("Failed to get register set for PID %d.", pid);
+#if defined(__arm__)
+        if (ptrace(PTRACE_GETREGS, pid, 0, &regs) == -1) {
+            PLOGE("Fallback to PTRACE_GETREGS failed.");
+            return false;
+        }
+#else
         return false;
+#endif
     }
 #else
 #    error "Unsupported architecture for register access in get_regs."
@@ -296,7 +303,14 @@ bool set_regs(int pid, struct user_regs_struct &regs) {
     struct iovec reg_iov = {.iov_base = &regs, .iov_len = sizeof(struct user_regs_struct)};
     if (ptrace(PTRACE_SETREGSET, pid, NT_PRSTATUS, &reg_iov) == -1) {
         PLOGE("Failed to set register set for PID %d.", pid);
+#if defined(__arm__)
+        if (ptrace(PTRACE_SETREGS, pid, 0, &regs) == -1) {
+            PLOGE("Fallback to PTRACE_SETREGS failed.");
+            return false;
+        }
+#else
         return false;
+#endif
     }
 #else
 #    error "Unsupported architecture for register access in set_regs."
@@ -588,17 +602,10 @@ bool remote_pre_call(int pid, struct user_regs_struct &regs, uintptr_t func_addr
         size_t stack_args_size = args.size() * sizeof(uintptr_t);
         align_stack(regs, stack_args_size);
 
-        // Push all arguments onto the stack (order is important if ABI is right-to-left push).
-        // The current implementation writes args.data() directly,
-        // assuming it's already in the correct order for push.
-        // For cdecl, arguments are pushed right-to-left.
-        // A vector `args = {A, B, C}` means A is arg1, B is arg2 etc.
-        // So, `C` should be pushed first, then `B`, then `A`.
-        // `write_proc` copies linearly.
-        // This implies `args` should be pre-reversed for cdecl.
-        // For simplicity, we assume the remote function is compatible with how it's pushed,
-        // or that it's variadic where order doesn't matter for first args.
-        // A robust i386 implementation would need to push args in reverse order.
+        // i386 cdecl expects arguments pushed Right-to-Left (stack grows down).
+        // Since `write_proc` writes to increasing addresses (up), a linear write
+        // starting at the new SP places the first argument at the lowest address.
+        // This matches the ABI memory layout without needing to reverse the vector.
         if (write_proc(pid, static_cast<uintptr_t>(regs.REG_SP), args.data(), stack_args_size) !=
             static_cast<ssize_t>(stack_args_size)) {
             LOGE("Failed to push arguments for i386 remote call.");
