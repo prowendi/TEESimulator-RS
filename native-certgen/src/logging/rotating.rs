@@ -53,7 +53,12 @@ fn rotate(state: &mut RotatingState) {
     state.current.take();
 
     let dir = &state.dir;
-    // Shift older files up: .{max-1} is deleted, .{N} -> .{N+1}
+    // Delete the oldest rotated file before shifting
+    let oldest = dir.join(format!("certgen.log.{}", state.max_files));
+    if oldest.exists() {
+        let _ = fs::remove_file(&oldest);
+    }
+    // Shift older files up: .{N} -> .{N+1}
     for i in (1..state.max_files).rev() {
         let from = dir.join(format!("certgen.log.{}", i));
         let to = dir.join(format!("certgen.log.{}", i + 1));
@@ -66,12 +71,6 @@ fn rotate(state: &mut RotatingState) {
     let first_rotated = dir.join("certgen.log.1");
     if current_path.exists() {
         let _ = fs::rename(&current_path, &first_rotated);
-    }
-
-    // Delete excess files beyond max_files
-    let excess = dir.join(format!("certgen.log.{}", state.max_files + 1));
-    if excess.exists() {
-        let _ = fs::remove_file(&excess);
     }
 
     let (file, size) = open_current_log(dir);

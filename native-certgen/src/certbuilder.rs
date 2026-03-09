@@ -87,8 +87,9 @@ fn build_leaf_params(
         timestamp_to_datetime(params.cert_not_after)?
     };
 
-    // Suppress AKI/SKI — Android attestation leaf certs don't include these
-    cp.key_identifier_method = rcgen::KeyIdMethod::PreSpecified(vec![]);
+    // rcgen 0.13.2: IsCa::NoCa (the default) emits neither BasicConstraints nor SKI
+    // extension. This matches real Android attestation leaf certs which include neither.
+    // No explicit suppression needed — NoCa is a no-op in the extension writer.
 
     // KeyUsage from purposes
     cp.key_usages = map_key_usages(&params.purposes);
@@ -101,20 +102,17 @@ fn build_leaf_params(
     Ok(cp)
 }
 
+/// Maps KeyPurpose values to X.509 KeyUsage bits per KeyCreationResult.aidl spec.
+/// Only SIGN, DECRYPT, WRAP_KEY, AGREE_KEY, and ATTEST_KEY produce KeyUsage bits.
+/// ENCRYPT and VERIFY are intentionally excluded (matches Kotlin CertificateGenerator).
 fn map_key_usages(purposes: &[i32]) -> Vec<KeyUsagePurpose> {
     let mut usages = Vec::new();
     for &purpose in purposes {
         match purpose {
-            2 | 3 => {
-                // SIGN or VERIFY -> digitalSignature
+            2 => {
+                // SIGN -> digitalSignature
                 if !usages.contains(&KeyUsagePurpose::DigitalSignature) {
                     usages.push(KeyUsagePurpose::DigitalSignature);
-                }
-            }
-            0 => {
-                // ENCRYPT -> keyEncipherment
-                if !usages.contains(&KeyUsagePurpose::KeyEncipherment) {
-                    usages.push(KeyUsagePurpose::KeyEncipherment);
                 }
             }
             1 => {
@@ -224,9 +222,17 @@ fn extract_string_from_der_any(der: &[u8]) -> String {
     let content = &der[header_len..end];
 
     match tag {
-        0x0C | 0x13 | 0x16 => {
-            // UTF8String (0x0C), PrintableString (0x13), IA5String (0x16)
+        0x0C | 0x13 | 0x16 | 0x1A => {
+            // UTF8String (0x0C), PrintableString (0x13), IA5String (0x16), VisibleString (0x1A)
             String::from_utf8_lossy(content).into_owned()
+        }
+        0x1E => {
+            // BMPString (UTF-16BE)
+            let chars: Vec<u16> = content
+                .chunks_exact(2)
+                .map(|c| u16::from_be_bytes([c[0], c[1]]))
+                .collect();
+            String::from_utf16_lossy(&chars)
         }
         _ => String::from_utf8_lossy(content).into_owned(),
     }
