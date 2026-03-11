@@ -22,18 +22,9 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    permissions:
-      id-token: write
-      attestations: write
-      contents: read
-    
-    outputs:
-      releaseName: ${{ steps.prepareArtifact.outputs.releaseName }}
-      debugName: ${{ steps.prepareArtifact.outputs.debugName }}
-    
+
     steps:
-      - name: Check out
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           submodules: "recursive"
           fetch-depth: 0
@@ -59,8 +50,7 @@ jobs:
             ~/.cargo/bin/cargo-ndk
             native-certgen/target
           key: rust-${{ runner.os }}-${{ hashFiles('native-certgen/Cargo.lock') }}
-          restore-keys: |
-            rust-${{ runner.os }}-
+          restore-keys: rust-${{ runner.os }}-
 
       - name: Install cargo-ndk
         run: command -v cargo-ndk || cargo install cargo-ndk
@@ -82,70 +72,92 @@ jobs:
           chmod +x ./gradlew
           ./gradlew zipRelease zipDebug -Porg.gradle.parallel=true -Porg.gradle.vfs.watch=true -Dorg.gradle.jvmargs=-Xmx2048m
 
-      - name: Prepare artifact
-        if: success()
-        id: prepareArtifact
+      - name: Read version
+        id: ver
         run: |
-          set -e
+          ver=$(grep 'val verName' app/build.gradle.kts | sed 's/.*"\(.*\)".*/\1/')
+          echo "version=${ver}" >> "$GITHUB_OUTPUT"
+
+      - name: Rename ZIPs for release
+        run: |
           RELEASE_FILE=$(find out -name "*Release*.zip" | head -1)
           DEBUG_FILE=$(find out -name "*Debug*.zip" | head -1)
-          
+
           if [[ -z "$RELEASE_FILE" || -z "$DEBUG_FILE" ]]; then
-            echo "Error: Could not find release or debug files in out/"
-            echo "Contents of out/ directory:"
-            ls -la out/ || echo "out/ directory does not exist"
+            echo "::error::Could not find release or debug ZIPs in out/"
+            ls -la out/ || echo "out/ does not exist"
             exit 1
           fi
-          
-          # Extract names
-          RELEASE_NAME=$(basename "$RELEASE_FILE" .zip)
-          DEBUG_NAME=$(basename "$DEBUG_FILE" .zip)
-          
-          echo "releaseName=$RELEASE_NAME" >> $GITHUB_OUTPUT
-          echo "debugName=$DEBUG_NAME" >> $GITHUB_OUTPUT
 
-          mkdir -p module-release module-debug
-          unzip -q "$RELEASE_FILE" -d module-release
-          unzip -q "$DEBUG_FILE" -d module-debug
-          echo "  Release: $RELEASE_NAME"
-          echo "  Debug: $DEBUG_NAME"
+          cp "$RELEASE_FILE" "out/TEESimulator-${VER}-Release.zip"
+          cp "$DEBUG_FILE" "out/TEESimulator-${VER}-Debug.zip"
 
-      - name: Upload release
-        if: success()
-        id: release
-        uses: actions/upload-artifact@v4
+          echo "Release: $(basename "$RELEASE_FILE") -> TEESimulator-${VER}-Release.zip"
+          echo "Debug: $(basename "$DEBUG_FILE") -> TEESimulator-${VER}-Debug.zip"
+        env:
+          VER: ${{ steps.ver.outputs.version }}
+
+      - uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.prepareArtifact.outputs.releaseName }}
-          path: "./module-release/*"
+          name: TEESimulator-release-zip
+          path: out/TEESimulator-*-Release.zip
           retention-days: 30
-          compression-level: 6
 
-      - name: Upload debug
-        if: success()
-        id: debug
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.prepareArtifact.outputs.debugName }}
-          path: "./module-debug/*"
+          name: TEESimulator-debug-zip
+          path: out/TEESimulator-*-Debug.zip
           retention-days: 7
-          compression-level: 6
 
-      - name: Upload release mappings
-        if: success()
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: release-mappings-${{ github.run_number }}
-          path: "./app/build/outputs/mapping/release"
+          name: release-mappings
+          path: app/build/outputs/mapping/release
           retention-days: 30
           compression-level: 9
 
-      - name: Summary
-        if: always()
+  release:
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read version
+        id: ver
         run: |
-          echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
-          echo "- **Status**: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Gradle Tasks**: assembleRelease, assembleDebug" >> $GITHUB_STEP_SUMMARY
-          if [[ "${{ job.status }}" == "success" ]]; then
-            echo "- **Release Artifact**: ${{ steps.prepareArtifact.outputs.releaseName }}" >> $GITHUB_STEP_SUMMARY
-            echo "- **Debug Artifact**: ${{ steps.prepareArtifact.outputs.debugName }}" >> $GITHUB_STEP_SUMMARY
-          fi
+          ver=$(grep 'val verName' app/build.gradle.kts | sed 's/.*"\(.*\)".*/\1/')
+          echo "version=${ver}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: TEESimulator-release-zip
+          path: zips
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: TEESimulator-debug-zip
+          path: zips
+
+      - name: Extract changelog
+        run: |
+          ver="${VER#v}"
+          awk "/^## TEESimulator v${ver}/{flag=1; next} /^## TEESimulator v/{if(flag) exit} flag" module/changelog.md > /tmp/notes.md
+          cat /tmp/notes.md
+        env:
+          VER: ${{ steps.ver.outputs.version }}
+
+      - name: Create release
+        run: |
+          gh release delete "$VER" --yes 2>/dev/null || true
+          gh release create "$VER" \
+            --title "$VER" \
+            --latest \
+            --notes-file /tmp/notes.md \
+            "zips/TEESimulator-${VER}-Release.zip" \
+            "zips/TEESimulator-${VER}-Debug.zip"
+        env:
+          VER: ${{ steps.ver.outputs.version }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
