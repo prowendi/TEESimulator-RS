@@ -34,16 +34,17 @@ private object JcaAlgorithmMapper {
                 Digest.SHA_2_512 -> "SHA512"
                 else -> "NONE"
             }
-        val keyAlgo =
-            when (params.algorithm) {
-                Algorithm.EC -> "ECDSA"
-                Algorithm.RSA -> "RSA"
-                else ->
-                    throw IllegalArgumentException(
-                        "Unsupported signature algorithm: ${params.algorithm}"
-                    )
+        return when (params.algorithm) {
+            Algorithm.EC -> "${digest}withECDSA"
+            Algorithm.RSA -> {
+                val isPss = params.padding.firstOrNull() == PaddingMode.RSA_PSS
+                if (isPss) "${digest}withRSA/PSS" else "${digest}withRSA"
             }
-        return "${digest}with${keyAlgo}"
+            else ->
+                throw IllegalArgumentException(
+                    "Unsupported signature algorithm: ${params.algorithm}"
+                )
+        }
     }
 
     fun mapCipherAlgorithm(params: KeyMintAttestation): String {
@@ -60,16 +61,18 @@ private object JcaAlgorithmMapper {
             when (params.blockMode.firstOrNull()) {
                 BlockMode.ECB -> "ECB"
                 BlockMode.CBC -> "CBC"
+                BlockMode.CTR -> "CTR"
                 BlockMode.GCM -> "GCM"
-                else -> "ECB" // Default for RSA
+                else -> "ECB"
             }
         val padding =
             when (params.padding.firstOrNull()) {
                 PaddingMode.NONE -> "NoPadding"
                 PaddingMode.PKCS7 -> "PKCS7Padding"
                 PaddingMode.RSA_PKCS1_1_5_ENCRYPT -> "PKCS1Padding"
+                PaddingMode.RSA_PKCS1_1_5_SIGN -> "PKCS1Padding"
                 PaddingMode.RSA_OAEP -> "OAEPPadding"
-                else -> "NoPadding" // Default for GCM
+                else -> "NoPadding"
             }
         return "$keyAlgo/$blockMode/$padding"
     }

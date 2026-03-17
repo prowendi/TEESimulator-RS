@@ -286,6 +286,15 @@ class KeyMintSecurityLevelInterceptor(
                     return InterceptorUtils.createErrorReply(KEYMINT_CANNOT_ATTEST_IDS)
                 }
 
+                val isSymmetric = parsedParams.algorithm == Algorithm.AES ||
+                    parsedParams.algorithm == Algorithm.HMAC ||
+                    parsedParams.algorithm == Algorithm.TRIPLE_DES
+
+                if (isSymmetric) {
+                    SystemLogger.debug("[TX_ID: $txId] Symmetric algorithm ${parsedParams.algorithm} → forwarding to HAL")
+                    return TransactionResult.ContinueAndSkipPost
+                }
+
                 val keyId = KeyIdentifier(callingUid, keyDescriptor.alias)
                 val isAttestKeyRequest = parsedParams.isAttestKey()
 
