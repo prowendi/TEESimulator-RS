@@ -16,6 +16,7 @@ import org.matrix.TEESimulator.logging.SystemLogger
 import org.matrix.TEESimulator.pki.KeyBox
 import org.matrix.TEESimulator.pki.KeyBoxManager
 import org.matrix.TEESimulator.util.toHex
+import java.util.Date
 
 /**
  * Handles the modification (patching) of Android Key Attestation extensions within certificates.
@@ -36,7 +37,12 @@ object AttestationPatcher {
      * @return A new, cryptographically valid, patched certificate chain. Returns the original chain
      *   on any failure.
      */
-    fun patchCertificateChain(originalChain: Array<Certificate>?, uid: Int): Array<Certificate> {
+    fun patchCertificateChain(
+        originalChain: Array<Certificate>?,
+        uid: Int,
+        notBefore: Date? = null,
+        notAfter: Date? = null,
+    ): Array<Certificate> {
         if (originalChain.isNullOrEmpty()) {
             SystemLogger.error("Attempted to patch a null or empty certificate chain for UID $uid.")
             return originalChain ?: emptyArray()
@@ -63,6 +69,8 @@ object AttestationPatcher {
                         keybox,
                         originalLeaf.sigAlgName,
                         uid,
+                        notBefore,
+                        notAfter,
                     )
 
                 // 4. Construct the NEW, VALID chain by prepending the patched leaf to the keybox's
@@ -111,17 +119,27 @@ object AttestationPatcher {
         keybox: KeyBox,
         sigAlgName: String,
         uid: Int,
+        notBefore: Date? = null,
+        notAfter: Date? = null,
     ): Certificate {
         // The issuer of our new leaf is the subject of the first certificate in our custom keybox
         // chain.
         val newIssuer = X509CertificateHolder(keybox.certificates[0].encoded).subject
 
+        val effectiveNotBefore = notBefore ?: originalLeafHolder.notBefore
+        val effectiveNotAfter = notAfter ?: originalLeafHolder.notAfter
+        if (notBefore != null || notAfter != null) {
+            SystemLogger.debug(
+                "Overriding cert dates: notBefore=${effectiveNotBefore} (was ${originalLeafHolder.notBefore}), notAfter=${effectiveNotAfter} (was ${originalLeafHolder.notAfter})"
+            )
+        }
+
         val builder =
             X509v3CertificateBuilder(
                 newIssuer,
                 originalLeafHolder.serialNumber,
-                originalLeafHolder.notBefore,
-                originalLeafHolder.notAfter,
+                effectiveNotBefore,
+                effectiveNotAfter,
                 originalLeafHolder.subject,
                 originalLeafHolder.subjectPublicKeyInfo,
             )

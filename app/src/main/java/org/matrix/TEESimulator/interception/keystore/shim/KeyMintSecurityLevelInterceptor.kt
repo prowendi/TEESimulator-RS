@@ -20,11 +20,13 @@ import java.security.SecureRandom
 import java.security.cert.Certificate
 import java.security.cert.CertificateFactory
 import java.security.spec.PKCS8EncodedKeySpec
+import java.util.Date
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedDeque
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.locks.LockSupport
 import org.matrix.TEESimulator.attestation.AttestationBuilder
 import org.matrix.TEESimulator.attestation.AttestationConstants
@@ -56,6 +58,10 @@ class KeyMintSecurityLevelInterceptor(
         val response: KeyEntryResponse,
         val keyParams: KeyMintAttestation? = null,
     )
+
+    // null = undecided, true = TEE works (use PATCH), false = TEE broken (use GENERATE)
+    // Instance field so TRUSTED_ENVIRONMENT and STRONGBOX decide independently
+    val teePathDecision = AtomicReference<Boolean?>(null)
 
     private val activeOps = ConcurrentHashMap<Int, ConcurrentLinkedDeque<SoftwareOperation>>()
     private val recentOps = ConcurrentHashMap<Int, ConcurrentLinkedDeque<Long>>()
@@ -204,12 +210,18 @@ class KeyMintSecurityLevelInterceptor(
                 CertificateHelper.getCertificateChain(metadata)
                     ?: return TransactionResult.SkipTransaction
             if (originalChain.size > 1) {
-                val newChain = AttestationPatcher.patchCertificateChain(originalChain, callingUid)
-
-                // Cache the newly patched chain to ensure consistency across subsequent API calls.
+                // Read the request parcel to extract keyDescriptor and cert date params.
                 data.enforceInterface(IKeystoreSecurityLevel.DESCRIPTOR)
                 val keyDescriptor = data.readTypedObject(KeyDescriptor.CREATOR)
                     ?: return TransactionResult.SkipTransaction
+                data.readTypedObject(KeyDescriptor.CREATOR) // skip attestationKey
+                val keyParams = data.createTypedArray(KeyParameter.CREATOR)
+                val certNotBefore = keyParams?.find { it.tag == Tag.CERTIFICATE_NOT_BEFORE }?.value?.dateTime?.let { Date(it) }
+                val certNotAfter = keyParams?.find { it.tag == Tag.CERTIFICATE_NOT_AFTER }?.value?.dateTime?.let { Date(it) }
+
+                val newChain = AttestationPatcher.patchCertificateChain(originalChain, callingUid, certNotBefore, certNotAfter)
+
+                // Cache the newly patched chain to ensure consistency across subsequent API calls.
                 val key = metadata.key
                     ?: return TransactionResult.SkipTransaction
                 val keyId = KeyIdentifier(callingUid, keyDescriptor.alias)
@@ -471,9 +483,12 @@ class KeyMintSecurityLevelInterceptor(
 
                 val isAuto = ConfigurationManager.isAutoMode(callingUid)
 
+                if (isAuto) SystemLogger.debug("AUTO dispatch: teePathDecision=${teePathDecision.get()} for ${keyDescriptor.alias}")
+
                 when {
                     forceGenerate -> doSoftwareKeyGen(callingUid, keyDescriptor, attestationKey, parsedParams, keyId, isAttestKeyRequest)
-                    isAuto && !teeFunctional -> raceTeePatch(callingUid, keyDescriptor, attestationKey, params, parsedParams, keyId, isAttestKeyRequest)
+                    isAuto && teePathDecision.get() == null -> raceTeePatch(callingUid, keyDescriptor, attestationKey, params, parsedParams, keyId, isAttestKeyRequest)
+                    isAuto && teePathDecision.get() == false -> doSoftwareKeyGen(callingUid, keyDescriptor, attestationKey, parsedParams, keyId, isAttestKeyRequest)
                     parsedParams.attestationChallenge != null -> TransactionResult.Continue
                     else -> {
                         cleanupKeyData(keyId)
@@ -633,12 +648,14 @@ class KeyMintSecurityLevelInterceptor(
         return try {
             val teeMetadata = threadA.join()
             threadB.cancel(true)
-            teeFunctional = true
-            SystemLogger.info("AUTO: TEE succeeded for ${keyDescriptor.alias}, marked functional.")
+            teePathDecision.compareAndSet(null, true)
+            SystemLogger.info("AUTO: TEE succeeded, path locked to PATCH for ${keyDescriptor.alias}")
 
             val originalChain = CertificateHelper.getCertificateChain(teeMetadata)
             if (originalChain != null && originalChain.size > 1) {
-                val newChain = AttestationPatcher.patchCertificateChain(originalChain, callingUid)
+                val newChain = AttestationPatcher.patchCertificateChain(
+                    originalChain, callingUid, parsedParams.certificateNotBefore, parsedParams.certificateNotAfter
+                )
                 CertificateHelper.updateCertificateChain(teeMetadata, newChain).getOrThrow()
                 teeMetadata.authorizations =
                     InterceptorUtils.patchAuthorizations(teeMetadata.authorizations, callingUid)
@@ -653,7 +670,13 @@ class KeyMintSecurityLevelInterceptor(
 
             InterceptorUtils.createTypedObjectReply(teeMetadata)
         } catch (_: Exception) {
-            SystemLogger.info("AUTO: TEE failed for ${keyDescriptor.alias}, using software result.")
+            if (teePathDecision.get() == true) {
+                threadB.cancel(true)
+                SystemLogger.info("AUTO: TEE failed locally but globally functional, forwarding for ${keyDescriptor.alias}")
+                return TransactionResult.Continue
+            }
+            teePathDecision.compareAndSet(null, false)
+            SystemLogger.info("AUTO: TEE failed, path locked to GENERATE for ${keyDescriptor.alias}")
             try {
                 threadB.join()
             } catch (e: Exception) {
@@ -870,7 +893,6 @@ class KeyMintSecurityLevelInterceptor(
 
     companion object {
         private val secureRandom = SecureRandom()
-        @Volatile var teeFunctional = false
 
         // Maximum alias length to prevent binder buffer exhaustion (Issue #109)
         // Binder buffer is ~1MB; 256KB provides 4x safety margin for transaction overhead

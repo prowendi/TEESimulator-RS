@@ -29,8 +29,6 @@ object AuthorizeCreate {
         ) {
             return KeystoreErrorCodes.unsupportedPurpose
         }
-        if (algo == Algorithm.EC && purpose == KeyPurpose.DECRYPT)
-            return KeystoreErrorCodes.unsupportedPurpose
         if (algo == Algorithm.RSA && purpose == KeyPurpose.AGREE_KEY)
             return KeystoreErrorCodes.unsupportedPurpose
         return null

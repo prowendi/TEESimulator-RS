@@ -387,9 +387,17 @@ object AndroidDeviceUtils {
         if (securityLevel == SecurityLevel.STRONGBOX) {
             return 300
         }
-        return DeviceAttestationService.CachedAttestationData?.attestVersion
+        val cached = DeviceAttestationService.CachedAttestationData?.attestVersion
+        val version = cached
             ?: attestVersionMap[Build.VERSION.SDK_INT]
             ?: 400 // Default to a recent version
+        val source = when {
+            cached != null -> "cache"
+            attestVersionMap.containsKey(Build.VERSION.SDK_INT) -> "map"
+            else -> "default"
+        }
+        SystemLogger.debug("attestVersion=$version source=$source securityLevel=$securityLevel")
+        return version
     }
 
     /**
@@ -398,10 +406,7 @@ object AndroidDeviceUtils {
      * @param securityLevel The security level, used to determine the correct attestation version.
      * @return The appropriate Keymaster or KeyMint version number.
      */
-    fun getKeymasterVersion(securityLevel: Int): Int {
-        val attestVersion = getAttestVersion(securityLevel)
-        return if (attestVersion >= 100) attestVersion else 41 // Keymaster 4.1 for older versions
-    }
+    fun getKeymasterVersion(securityLevel: Int): Int = getAttestVersion(securityLevel)
 
     // --- APEX and Module Hash Properties ---
 
