@@ -24,6 +24,7 @@ object BulletinPoller {
 
     private val BOOTSTRAP_INTERVALS = longArrayOf(5_000, 30_000, 120_000, 600_000, 1_800_000)
     private val DATE_REGEX = Regex("<td>(\\d{4}-\\d{2}-\\d{2})</td>")
+    private val PATCH_DATE_PATTERN = Regex("^\\d{4}-\\d{2}-\\d{2}$")
 
     private lateinit var handler: Handler
     @Volatile private var bootstrapStep = 0
@@ -119,7 +120,7 @@ object BulletinPoller {
     private fun currentPatch(): String? {
         val f = File(PATCH_FILE)
         if (!f.exists()) return null
-        return try {
+        val raw = try {
             f.readLines()
                 .firstOrNull { it.startsWith("system=") }
                 ?.substringAfter("system=")
@@ -128,6 +129,12 @@ object BulletinPoller {
         } catch (_: Exception) {
             null
         }
+        if (raw == null) return null
+        if (PATCH_DATE_PATTERN.matches(raw)) return raw
+        SystemLogger.warning(
+            "BulletinPoller: ignoring malformed system='$raw' in $PATCH_FILE"
+        )
+        return null
     }
 
     private fun appendHistory(result: FetchResult) {
