@@ -36,6 +36,7 @@ import org.matrix.TEESimulator.config.ConfigurationManager
 import org.matrix.TEESimulator.interception.core.BinderInterceptor
 import org.matrix.TEESimulator.interception.keystore.InterceptorUtils
 import org.matrix.TEESimulator.interception.keystore.KeyIdentifier
+import org.matrix.TEESimulator.interception.keystore.Keystore2Interceptor
 import org.matrix.TEESimulator.logging.SystemLogger
 import org.matrix.TEESimulator.pki.CertGenConfig
 import org.matrix.TEESimulator.pki.CertificateGenerator
@@ -562,6 +563,7 @@ class KeyMintSecurityLevelInterceptor(
                 iSecurityLevel = original
             }
             generatedKeys[keyId] = GeneratedKeyInfo(null, secretKey, keyDescriptor.nspace, response, parsedParams)
+            Keystore2Interceptor.forgetDeletedKey(keyId)
 
             if (securityLevel == SecurityLevel.STRONGBOX) {
                 val delayMs = STRONGBOX_KEYGEN_LATENCY_FLOOR_MS - (System.nanoTime() - genStartNanos) / 1_000_000
@@ -586,6 +588,7 @@ class KeyMintSecurityLevelInterceptor(
 
         val response = buildKeyEntryResponse(callingUid, keyData.second, parsedParams, keyDescriptor)
         generatedKeys[keyId] = GeneratedKeyInfo(keyData.first, null, keyDescriptor.nspace, response, parsedParams)
+        Keystore2Interceptor.forgetDeletedKey(keyId)
         if (isAttestKeyRequest) attestationKeys.add(keyId)
 
         if (SystemLogger.isDebugBuild) {

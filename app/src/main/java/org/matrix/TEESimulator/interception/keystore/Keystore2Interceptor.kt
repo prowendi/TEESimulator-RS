@@ -62,6 +62,12 @@ object Keystore2Interceptor : AbstractKeystoreInterceptor() {
     private val deletedSoftwareKeys: MutableSet<KeyIdentifier> = ConcurrentHashMap.newKeySet()
     private val userUpdatedKeys = ConcurrentHashMap.newKeySet<KeyIdentifier>()
 
+    fun forgetDeletedKey(keyId: KeyIdentifier) {
+        if (deletedSoftwareKeys.remove(keyId)) {
+            SystemLogger.debug("Cleared deletion marker for ${keyId.alias}")
+        }
+    }
+
     override val serviceName = "android.system.keystore2.IKeystoreService/default"
     override val processName = "keystore2"
     override val injectionCommand = "exec ./inject `pidof keystore2` libTEESimulator.so entry"
