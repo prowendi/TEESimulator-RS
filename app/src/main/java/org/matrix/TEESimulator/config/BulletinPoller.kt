@@ -36,9 +36,14 @@ object BulletinPoller {
     }
 
     private fun pollOnce() {
-        val result = fetchAndParse()
-        appendHistory(result)
-        scheduleNext(result.status == "success")
+        try {
+            val result = fetchAndParse()
+            appendHistory(result)
+            scheduleNext(result.status == "success")
+        } catch (t: Throwable) {
+            SystemLogger.error("BulletinPoller: pollOnce failed", t)
+            scheduleNext(false)
+        }
     }
 
     private fun scheduleNext(success: Boolean) {
