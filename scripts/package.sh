@@ -10,6 +10,12 @@
 #   ./scripts/package.sh --rust --release             # build Rust crate first, then release
 set -euo pipefail
 
+# Gradle's buildRustCertgen resolves `cargo` against the daemon's inherited PATH,
+# not the env we inject via gradle's Exec.environment(). Prepend the per-user
+# rustup install so non-login shells (CI, IDE-launched terminals, fresh tmux)
+# still find it without sourcing /etc/profile.d/cargo-path.sh.
+[ -d "$HOME/.cargo/bin" ] && PATH="$HOME/.cargo/bin:$PATH"
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 OUT_DIR="$PROJECT_ROOT/out"
