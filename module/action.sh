@@ -2,15 +2,17 @@
 MODDIR=${0%/*}
 CONFIG_DIR=/data/adb/tricky_store
 
+. "$MODDIR/action_i18n.sh"
+
 echo "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "  ⚠️  Clear Persistent Key Storage"
+echo "  ⚠️  $(_msg confirm_header)"
 echo "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo " "
-echo "  This deletes all cached attestation keys."
-echo "  Apps using attestation will re-enroll on next use."
+echo "  $(_msg confirm_warning_1)"
+echo "  $(_msg confirm_warning_2)"
 echo " "
-echo "  🔊  Vol+  = Confirm clear"
-echo "  🔉  Vol-  = Cancel (default after 10s)"
+echo "  🔊  $(_msg confirm_vol_up)"
+echo "  🔉  $(_msg confirm_vol_down)"
 echo " "
 
 confirm() {
@@ -50,7 +52,7 @@ confirm() {
 
 if ! confirm; then
     echo " "
-    echo "  ❌ Cancelled — keys preserved"
+    echo "  ❌ $(_msg confirm_cancelled)"
     exit 0
 fi
 
@@ -58,8 +60,8 @@ if [ -d "$CONFIG_DIR/persistent_keys" ]; then
     rm -rf "$CONFIG_DIR/persistent_keys"
     mkdir -p "$CONFIG_DIR/persistent_keys"
     echo " "
-    echo "  ✅ Persistent key storage cleared"
+    echo "  ✅ $(_msg confirm_cleared)"
 else
     echo " "
-    echo "  ℹ️  No persistent key storage found"
+    echo "  ℹ️  $(_msg confirm_not_found)"
 fi
