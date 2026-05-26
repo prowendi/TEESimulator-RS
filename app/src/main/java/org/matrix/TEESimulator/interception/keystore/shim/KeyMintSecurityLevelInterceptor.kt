@@ -317,7 +317,7 @@ class KeyMintSecurityLevelInterceptor(
                     entry ?: run {
                         trackAndEnforceOpLimit(callingUid, txId)?.let { return it }
                         SystemLogger.info("[TX_ID: $txId] createOperation KeyId(${keyDescriptor.nspace}) NOT FOUND for uid=$callingUid. Forwarding to HAL.")
-                        return TransactionResult.Continue
+                        return TransactionResult.ContinueAndSkipPost
                     }
                 }
                 else -> {
