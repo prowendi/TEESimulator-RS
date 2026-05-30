@@ -434,8 +434,8 @@ class KeyMintSecurityLevelInterceptor(
                 SystemLogger.debug(
                     "Handling generateKey ${keyDescriptor.alias}, attestKey=${attestationKey?.alias}"
                 )
-                val params = data.createTypedArray(KeyParameter.CREATOR)!!
-                val parsedParams = KeyMintAttestation(params)
+                var params = data.createTypedArray(KeyParameter.CREATOR)!!
+                var parsedParams = KeyMintAttestation(params)
                 val isAttestKeyRequest = parsedParams.isAttestKey()
 
                 if (ConfigurationManager.shouldSkipUid(callingUid)
@@ -477,8 +477,16 @@ class KeyMintSecurityLevelInterceptor(
                     return InterceptorUtils.createErrorReply(KEYMINT_CANNOT_ATTEST_IDS)
                 }
 
-                // AOSP security_level.rs:478-485: INCLUDE_UNIQUE_ID requires
-                // SELinux gen_unique_id OR Android REQUEST_UNIQUE_ID_ATTESTATION
+                // INCLUDE_UNIQUE_ID requires SELinux gen_unique_id OR
+                // android.permission.REQUEST_UNIQUE_ID_ATTESTATION (AOSP
+                // security_level.rs:478-485). AOSP returns PERMISSION_DENIED
+                // when neither is held — but doing so breaks Google Wallet
+                // card binding (Wallet's generateKey carries the tag without
+                // holding the permission, and Play Integrity also fails when
+                // unique_id ends up in the attestation). Silently strip the
+                // tag so the key generates normally and the resulting
+                // attestation simply omits the unique_id field. This mirrors
+                // the pre-PR157 behavior where the tag had no effect.
                 if (params.any { it.tag == Tag.INCLUDE_UNIQUE_ID }) {
                     val hasSELinux = ConfigurationManager.checkSELinuxPermission(
                         callingPid, "keystore_key", "gen_unique_id",
@@ -487,8 +495,9 @@ class KeyMintSecurityLevelInterceptor(
                         callingUid, "android.permission.REQUEST_UNIQUE_ID_ATTESTATION",
                     )
                     if (!hasSELinux && !hasAndroid) {
-                        SystemLogger.warning("[TX_ID: $txId] Rejecting INCLUDE_UNIQUE_ID for uid=$callingUid pid=$callingPid")
-                        return InterceptorUtils.createServiceSpecificErrorReply(RESPONSE_PERMISSION_DENIED)
+                        SystemLogger.debug("[TX_ID: $txId] Stripping INCLUDE_UNIQUE_ID for uid=$callingUid pid=$callingPid (no permission)")
+                        params = params.filter { it.tag != Tag.INCLUDE_UNIQUE_ID }.toTypedArray()
+                        parsedParams = KeyMintAttestation(params)
                     }
                 }
 
