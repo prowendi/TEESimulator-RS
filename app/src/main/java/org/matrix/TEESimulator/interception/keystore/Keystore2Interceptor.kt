@@ -5,6 +5,7 @@ import android.hardware.security.keymint.SecurityLevel
 import android.os.Build
 import android.os.IBinder
 import android.os.Parcel
+import android.os.ServiceManager
 import android.system.keystore2.Domain
 import android.system.keystore2.IKeystoreService
 import android.system.keystore2.KeyDescriptor
@@ -101,6 +102,27 @@ object Keystore2Interceptor : AbstractKeystoreInterceptor() {
     override fun onInterceptorReady(service: IBinder, backdoor: IBinder) {
         val keystoreInterface = IKeystoreService.Stub.asInterface(service)
         setupSecurityLevelInterceptors(keystoreInterface, backdoor)
+        setupMaintenanceInterceptor(backdoor)
+    }
+
+    /**
+     * Hooks the keystore2 daemon's `android.security.maintenance` binder, which is hosted by the
+     * same process, so synthetic key state follows real key-lifecycle events. Best-effort: if the
+     * service is absent the synthetic plane simply forgoes lifecycle parity.
+     */
+    private fun setupMaintenanceInterceptor(backdoor: IBinder) {
+        runCatching {
+                ServiceManager.getService("android.security.maintenance")?.let { maintenance ->
+                    SystemLogger.info("Found maintenance binder. Registering interceptor...")
+                    register(
+                        backdoor,
+                        maintenance,
+                        Keystore2MaintenanceInterceptor,
+                        Keystore2MaintenanceInterceptor.interceptedCodes,
+                    )
+                } ?: SystemLogger.warning("Maintenance binder not found; skipping lifecycle parity.")
+            }
+            .onFailure { SystemLogger.error("Failed to intercept maintenance binder.", it) }
     }
 
     private fun setupSecurityLevelInterceptors(service: IKeystoreService, backdoor: IBinder) {

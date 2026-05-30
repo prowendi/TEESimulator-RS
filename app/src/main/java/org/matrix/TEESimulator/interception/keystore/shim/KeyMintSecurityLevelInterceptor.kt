@@ -1278,6 +1278,36 @@ class KeyMintSecurityLevelInterceptor(
             usageCounters.remove(keyId)
         }
 
+        /** Clears every synthetic key owned by [uid] (maintenance.clearNamespace, Domain.APP). */
+        fun clearNamespaceKeys(uid: Int) {
+            val victims = generatedKeys.keys.filter { it.uid == uid }
+            if (victims.isEmpty()) return
+            victims.forEach { cleanupKeyData(it) } // also purges grants + persistence
+            SystemLogger.info(
+                "Cleared ${victims.size} synthetic keys for uid=$uid (maintenance.clearNamespace)"
+            )
+        }
+
+        /**
+         * Re-keys a synthetic entry from [srcId] to [dstId] for maintenance.migrateKeyNamespace,
+         * preserving the key material, certificate chain, and any grants (which reference the key,
+         * not the namespace). In-memory only: the stale persisted file is dropped and the migrated
+         * key is not re-persisted, matching the single-session boundary the grant plane already
+         * accepts (Phase 9 plan §9). No-op if [srcId] is not ours or [dstId] already exists.
+         */
+        fun migrateGeneratedKey(srcId: KeyIdentifier, dstId: KeyIdentifier) {
+            if (srcId == dstId || generatedKeys.containsKey(dstId)) return
+            val info = generatedKeys.remove(srcId) ?: return
+            generatedKeys[dstId] = info
+            if (attestationKeys.remove(srcId)) attestationKeys.add(dstId)
+            if (importedKeys.remove(srcId)) importedKeys.add(dstId)
+            softwareGrants.entries
+                .filter { it.value.ownerKeyId == srcId }
+                .forEach { softwareGrants[it.key] = it.value.copy(ownerKeyId = dstId) }
+            GeneratedKeyPersistence.delete(srcId)
+            SystemLogger.info("Migrated synthetic key $srcId -> $dstId (maintenance.migrateKeyNamespace)")
+        }
+
         fun removeOperationInterceptor(operationBinder: IBinder, backdoor: IBinder) {
             unregister(backdoor, operationBinder)
 
